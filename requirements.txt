@@ -1,0 +1,5 @@
+-e git+git@github.com:emCOMP/ezconf.git@1072a541c84f938c8753738574520685b00ec87e#egg=ezconf
+psycopg2==2.7.3.2
+python-dateutil==2.6.1
+six==1.11.0
+ujson==1.35
