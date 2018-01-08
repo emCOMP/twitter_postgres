@@ -97,7 +97,7 @@ def get_hashtags(obj):
 
 
 def sanitize_string(text):
-    return text.replace('\\u0000', '')
+    return text.replace('\\u0000', '').replace('\x00', '')
 
 def create_insert_tuple(tweet_obj):
     #print line
@@ -117,7 +117,7 @@ def create_insert_tuple(tweet_obj):
 
         row = (
             obj["id"],
-            obj["text"],
+            sanitize_string(obj["text"]),
             convertRFC822ToDateTime(obj["created_at"]),
             obj["geo"]["coordinates"][0] if obj["geo"] is not None else None,
             obj["geo"]["coordinates"][1] if obj["geo"] is not None else None,
@@ -127,10 +127,10 @@ def create_insert_tuple(tweet_obj):
             obj["truncated"],
             obj["source"],
             user["id"],
-            user["screen_name"],
-            user["name"],
-            user["description"],
-            user["location"],
+            sanitize_string(user["screen_name"]),
+            sanitize_string(user["name"]),
+            sanitize_string(user["description"]),
+            sanitize_string(user["location"]),
             user["utc_offset"],
             user["time_zone"],
             obj["in_reply_to_screen_name"],
@@ -153,9 +153,9 @@ def create_insert_tuple(tweet_obj):
         if retweet is not None:
             row += (
                 retweet["id"],
-                retweet["text"],
+                sanitize_string(retweet["text"]),
                 retweet["user"]["id"],
-                retweet["user"]["screen_name"],
+                sanitize_string(retweet["user"]["screen_name"]),
                 )
         else:
             row += (
@@ -169,9 +169,9 @@ def create_insert_tuple(tweet_obj):
         if quote is not None:
             row += (
                 quote["id"],
-                quote["text"],
+                sanitize_string(quote["text"]),
                 quote["user"]["id"],
-                quote["user"]["screen_name"],
+                sanitize_string(quote["user"]["screen_name"]),
                 )
         else:
             row += (
@@ -433,7 +433,7 @@ for in_idx, infile_name in enumerate(input_files):
         while True:
             lines = [
                 create_insert_tuple(
-                    ct.timeline[i]) for i in islice(id_iter, 10)]
+                    ct.timeline[i]) for i in islice(id_iter, 32)]
 
             # enough is enough
             if lines is None or len(lines) == 0:
@@ -454,7 +454,7 @@ for in_idx, infile_name in enumerate(input_files):
                 status_updater.current_val += len(lines)
 
             except Exception, e:
-                #print "\n"*2, values, "\n"*2, query
+                print "\n"*2, values, "\n"*2, query
                 traceback.print_exc()
                 quit()
 
