@@ -15,6 +15,7 @@ import ujson as json
 from psycopg2.extras import Json
 from itertools import islice
 from dateutil.relativedelta import relativedelta
+from dateutil import parser as du_parser
 import time
 import calendar
 from ezconf import ConfigFile
@@ -68,7 +69,10 @@ DB_FIELDS = [
     "quoted_status_user_id",
     "quoted_status_user_screen_name",
     "source_tweet_id",
-    "tweet"
+    "collection_date",
+    "collection_geo",
+    "collection_locterm",
+    "tweet",
 ]
 
 
@@ -92,9 +96,11 @@ def get_hashtags(obj):
     return [h["text"] for h in hashtags]
 
 
-def create_insert_tuple(obj):
+def create_insert_tuple(tweet_obj):
     #print line
     #print "\n" * 4
+
+    obj = tweet_obj.obj
 
     try:
 
@@ -172,7 +178,14 @@ def create_insert_tuple(obj):
                 None)
 
 
-        row += (None, json.dumps(obj))
+        # add dataset fields
+        row += (
+            None,
+            tweet_obj.collection_date,
+            tweet_obj.geo,  
+            tweet_obj.locterm,
+            json.dumps(obj)
+            )
 
         return row
 
@@ -186,27 +199,66 @@ def create_insert_tuple(obj):
         raise e
 
 
-def file_getter(source):
-    while True:
-        line = next(source)
-        if len(line.strip()) > 0:
-            obj = json.loads(line)
-            id = obj["id"]
 
-            if id in added_ids:
-                print "duplicate tweet:", id
+class CrispTweet(object):
+    """
+    Container for a tweet from the crisp project
+    """
+
+    def __init__(self, collection_date, is_locterm, is_geo,  id, obj):
+        """
+        """
+
+        self.id = id
+        self.obj = obj
+        self.collection_date = collection_date
+        self.locterm = is_locterm
+        self.geo = is_geo
+
+    def update(self, is_locterm, is_geo):
+        """
+        convenience function update the tweet with new collection data.
+
+        This is incredibly problematic when mixing these two datasets.
+        Which collection_date tweet takes precedence?
+        """
+
+        self.locterm |= is_locterm
+        self.geo |= is_geo
 
 
 
-def obj_getter(source):
-    return next(source)
 
+class CrispTimeline(object):
+    """
+    Convenience wrapper for Tweets
+    """
 
-def get_next_batch(source, source_get_func, max_count):
-    cur = 0
-    while cur < max_count:
-        obj = source_get_func
+    def __init__(self):
+        self.timeline = {}
 
+    def add(self, collection_date, is_locterm, is_geo, id, obj):
+        if id in self.timeline:
+            self.timeline[id].update(is_locterm, is_geo)
+        else:
+            self.timeline[id] = CrispTweet(
+                collection_date,
+                is_locterm,
+                is_geo,
+                id,
+                obj)
+
+    def parse_file(self, filename, is_locterm, is_geo):
+        """
+        opens filename and parses it
+        """
+
+        with open(filename) as f:
+            data = json.loads(f.read())
+            collected_ts = du_parser.parse(data["utc_timestamp"], ignoretz=True)
+            for t in data["historic_tweets"]:
+                id = t["id"]
+                self.add(collected_ts, is_locterm, is_geo, id, t)
 
 
 
@@ -267,14 +319,13 @@ class TimelineFileIterator(object):
 
 
 def create_table(db, table_name):
-    with open("./sql/create_flat.sql") as f:
+    with open("./sql/create_crisp.sql") as f:
         sql = f.read().format(table_name=table_name)
         db.execute(sql)
 
 
 
 
-payload_tweets = {}
 added_ids = set()
 
 
@@ -284,7 +335,8 @@ added_ids = set()
 #
 #
 parser = argparse.ArgumentParser(description='twitter postgres insert code')
-parser.add_argument('input_dir', help='dir')
+parser.add_argument('locterm_data_dir', help='directory where the locterm timelines exist')
+parser.add_argument('geo_data_dir', help='directory where geo timelines exist')
 parser.add_argument('table_name', help='name of the table')
 parser.add_argument(
     '--drop_table', help='drops table if it exists', action='store_true')
@@ -326,8 +378,15 @@ status_updater = StatusUpdater()
 
 
 # find all our files
-input_files = sorted(glob.glob(os.path.join(args.input_dir, "*.json")))
-print input_files
+# this works by joining the filenames, which are just id.json, from 2 directories
+# this may run into case-sensitivity issues on some platforms
+input_files = sorted(
+    set(
+        [os.path.basename(x) for x in glob.glob(os.path.join(args.locterm_data_dir, "*.json"))] +
+        [os.path.basename(x) for x in glob.glob(os.path.join(args.geo_data_dir, "*.json"))]
+        )
+    )
+
 status_updater.total_files = len(input_files)
 
 
@@ -338,52 +397,77 @@ cur.execute("SET TIME ZONE 'UTC';")
 arg_list = "(%s)"%(",".join(["%s"] * len(DB_FIELDS)))
 db_cols = "(%s)"%(",".join(DB_FIELDS))
 
+possible_data_dirs = [args.locterm_data_dir, args.geo_data_dir]
+
 # step through each file
-for infile_name in input_files:
+for in_idx, infile_name in enumerate(input_files):
 
-    with TimelineFileIterator(infile_name) as infile:
-        file_length = infile.file_length
+    # update status_updater
+    status_updater.current_file = in_idx
+    status_updater.update(force=True)
 
-        try:
-            while True:
-                lines = [
-                    create_insert_tuple(
-                        i) for i in islice(infile, 10)]
+    ct = CrispTimeline()
 
-                # enough is enough
-                if lines is None or len(lines) == 0:
-                    break
+    # add each timeline from all datasets if it exists
+    for data_dir in possible_data_dirs:
+        file_path = os.path.join(data_dir, infile_name)
+        is_geo = args.geo_data_dir == data_dir
+        is_locterm = args.locterm_data_dir == data_dir
+        if os.path.exists(file_path):
+            ct.parse_file(file_path, is_locterm, is_geo)
 
-                # update parsed status updater
-                status_updater.count += len(lines)
 
-                try:
-                    values = ','.join(
-                        cur.mogrify(arg_list, x) for x in lines)
-                    query = "insert into %s %s values " % (
-                        args.table_name, db_cols)
-                    cur.execute(query + values)
+    # sort the data
+    ids = sorted(ct.timeline.keys())
 
-                    # update status updater
-                    status_updater.total_added += len(lines)
 
-                except Exception, e:
-                    traceback.print_exc()
-                    quit()
+    status_updater.total_val / len(ids)
+    status_updater.current_val = 0
 
+    try:
+        id_iter = iter(ids)
+
+        while True:
+            lines = [
+                create_insert_tuple(
+                    ct.timeline[i]) for i in islice(id_iter, 10)]
+
+            # enough is enough
+            if lines is None or len(lines) == 0:
+                break
+
+            # update parsed status updater
+            status_updater.count += len(lines)
+
+            try:
+                values = ','.join(
+                    cur.mogrify(arg_list, x) for x in lines)
+                query = "insert into %s %s values " % (
+                    args.table_name, db_cols)
+                cur.execute(query + values)
 
                 # update status updater
-                if file_length > 0:
-                    status_updater.current_val = os.lseek(
-                        infile.fileno(), 0, os.SEEK_CUR)
-                status_updater.update()
+                status_updater.total_added += len(lines)
+                status_updater.current_val += len(lines)
 
-        except Exception, e:
-            traceback.print_exc()
-            quit()
+            except Exception, e:
+                #print "\n"*2, values, "\n"*2, query
+                traceback.print_exc()
+                quit()
 
-        status_updater.current_file += 1
-        status_updater.update()
+
+            
+            status_updater.update()
+
+    except Exception, e:
+        traceback.print_exc()
+        quit()
+
+
+    status_updater.update()
+
+
+status_updater.update(force=True)
 
 # commit the transaction
 print "Committing..."
