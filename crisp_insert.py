@@ -96,6 +96,9 @@ def get_hashtags(obj):
     return [h["text"] for h in hashtags]
 
 
+def sanitize_string(text):
+    return text.replace('\\u0000', '')
+
 def create_insert_tuple(tweet_obj):
     #print line
     #print "\n" * 4
@@ -184,7 +187,7 @@ def create_insert_tuple(tweet_obj):
             tweet_obj.collection_date,
             tweet_obj.geo,  
             tweet_obj.locterm,
-            json.dumps(obj)
+            sanitize_string(json.dumps(obj))
             )
 
         return row
@@ -421,7 +424,7 @@ for in_idx, infile_name in enumerate(input_files):
     ids = sorted(ct.timeline.keys())
 
 
-    status_updater.total_val / len(ids)
+    status_updater.total_val = len(ids)
     status_updater.current_val = 0
 
     try:
