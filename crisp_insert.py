@@ -72,6 +72,7 @@ DB_FIELDS = [
     "collection_date",
     "collection_geo",
     "collection_locterm",
+    "_em_combined_text",
     "tweet",
 ]
 
@@ -104,6 +105,7 @@ def create_insert_tuple(tweet_obj):
     #print "\n" * 4
 
     obj = tweet_obj.obj
+    combined_text = ""
 
     try:
 
@@ -114,6 +116,8 @@ def create_insert_tuple(tweet_obj):
             print "\n" * 4
             print obj.keys()
             return None
+
+        combined_text = sanitize_string(obj["text"])
 
         row = (
             obj["id"],
@@ -151,6 +155,7 @@ def create_insert_tuple(tweet_obj):
 
         retweet = obj.get("retweeted_status", None)
         if retweet is not None:
+            combined_text += " " + sanitize_string(retweet["text"])
             row += (
                 retweet["id"],
                 sanitize_string(retweet["text"]),
@@ -167,6 +172,7 @@ def create_insert_tuple(tweet_obj):
 
         quote = obj.get("quoted_status", None)
         if quote is not None:
+            combined_text += " " + sanitize_string(quote["text"])
             row += (
                 quote["id"],
                 sanitize_string(quote["text"]),
@@ -187,6 +193,7 @@ def create_insert_tuple(tweet_obj):
             tweet_obj.collection_date,
             tweet_obj.geo,  
             tweet_obj.locterm,
+            combined_text,
             sanitize_string(json.dumps(obj))
             )
 

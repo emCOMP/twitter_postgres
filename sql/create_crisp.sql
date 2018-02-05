@@ -57,6 +57,8 @@ CREATE TABLE public.{table_name}
     collection_geo BOOLEAN,
     collection_locterm BOOLEAN,
 
+    _em_combined_text TEXT,
+
     tweet JSONB
 );
 
